@@ -2,6 +2,7 @@ from functools import wraps
 
 import qrcode
 import qrcode.image.svg
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
@@ -17,6 +18,7 @@ from django.views.decorators.http import require_POST
 
 from . import services
 from .forms import AccountForm, ClientForm, ServerForm
+from .middleware import FORCE_CHANGE_KEY
 from .models import AuditLog, Client, Server
 
 
@@ -301,9 +303,13 @@ def account_delete(request, pk):
 @login_required
 def password_change(request):
     form = PasswordChangeForm(request.user, request.POST or None)
+    if (request.method == "POST" and form.is_valid()
+            and form.cleaned_data["new_password1"] == settings.PRIVATEVPN_DEFAULT_ADMIN_PASSWORD):
+        form.add_error("new_password1", "Pick a password different from the default one.")
     if request.method == "POST" and form.is_valid():
         user = form.save()
         update_session_auth_hash(request, user)
+        request.session.pop(FORCE_CHANGE_KEY, None)
         AuditLog.record(request.user, "account.password", user.username)
         messages.success(request, "Password changed.")
         return redirect("dashboard")

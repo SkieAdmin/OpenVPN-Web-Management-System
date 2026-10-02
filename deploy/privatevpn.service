@@ -1,0 +1,21 @@
+[Unit]
+Description=PrivateVPN web panel (gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=privatevpn
+Group=privatevpn
+EnvironmentFile=/etc/privatevpn.env
+WorkingDirectory=/opt/privatevpn
+ExecStart=/opt/privatevpn/.venv/bin/gunicorn privatevpn.wsgi:application \
+    --bind 127.0.0.1:8010 --workers 2 --timeout 90 --access-logfile - --error-logfile -
+Restart=on-failure
+RestartSec=3
+PrivateTmp=true
+# NoNewPrivileges/ProtectSystem are left off on purpose: the app needs sudo
+# to run /usr/local/sbin/privatevpn-helper, which writes /etc/wireguard.
+
+[Install]
+WantedBy=multi-user.target

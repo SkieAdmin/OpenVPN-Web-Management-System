@@ -1,4 +1,15 @@
-"""Run shell commands on the VPN server, over SSH or locally."""
+"""Talk to WireGuard on the VPN server.
+
+Two runners expose the same small set of operations:
+
+* LocalRunner - the app runs on the VPN server. Every privileged step goes
+  through /usr/local/sbin/privatevpn-helper via sudo, so the web process
+  itself never runs as root and can only do what the helper allows.
+* SSHRunner   - the app runs elsewhere (e.g. a Windows PC) and manages the
+  server over SSH.
+"""
+import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -6,29 +17,27 @@ from pathlib import Path
 import paramiko
 from django.conf import settings
 
-KNOWN_HOSTS = Path(settings.BASE_DIR) / "known_hosts"
+KNOWN_HOSTS = Path(settings.DATA_DIR) / "known_hosts"
+HELPER = settings.PRIVATEVPN_HELPER
+IFACE_RE = re.compile(r"^[A-Za-z0-9_=+.-]{1,15}$")
+PEER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,15}$")
 
 
 class RemoteError(Exception):
     pass
 
 
+def _check_iface(server):
+    if not IFACE_RE.match(server.interface or ""):
+        raise RemoteError(f"Invalid interface name '{server.interface}'.")
+    return server.interface
+
+
 class _Base:
     def __init__(self, server):
         self.server = server
-
-    def wrap(self, command: str) -> str:
-        # Always go through bash so process substitution like <(...) works.
-        cmd = f"bash -c {shlex.quote(command)}"
-        if self.server.use_sudo:
-            cmd = f"sudo -n {cmd}"
-        return cmd
-
-    def run(self, command: str, stdin: str | None = None, check: bool = True):
-        code, out, err = self._exec(self.wrap(command), stdin)
-        if check and code != 0:
-            raise RemoteError(f"`{command}` failed (exit {code}): {(err or out).strip()[:500]}")
-        return code, out, err
+        self.iface = _check_iface(server)
+        self.unit = f"wg-quick@{self.iface}"
 
     def __enter__(self):
         return self
@@ -41,14 +50,60 @@ class _Base:
 
 
 class LocalRunner(_Base):
-    def _exec(self, command, stdin):
+    """Calls the root helper. Runs it directly when already root (e.g. dev box)."""
+
+    def _helper(self, *args, stdin=None, check=True):
+        is_root = getattr(os, "geteuid", lambda: -1)() == 0
+        cmd = [HELPER, *args] if is_root else ["sudo", "-n", HELPER, *args]
         try:
-            proc = subprocess.run(
-                command, shell=True, input=stdin, capture_output=True, text=True, timeout=60,
-            )
+            proc = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=60)
+        except FileNotFoundError as exc:
+            raise RemoteError(f"{exc.filename} not found. Run deploy/install.sh on the server.") from exc
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RemoteError(str(exc)) from exc
-        return proc.returncode, proc.stdout, proc.stderr
+        if check and proc.returncode != 0:
+            msg = (proc.stderr or proc.stdout).strip()[:500]
+            if "a password is required" in msg or "not allowed" in msg:
+                msg += " (sudo rule missing: re-run deploy/install.sh)"
+            raise RemoteError(f"helper {args[0]} failed (exit {proc.returncode}): {msg}")
+        return proc.returncode, proc.stdout
+
+    def whoami(self):
+        return self._helper("whoami")[1].strip()
+
+    def wg_version(self):
+        code, out = self._helper("version", check=False)
+        return code == 0, out.strip()
+
+    def conf_readable(self):
+        return self._helper("read-conf", self.iface, check=False)[0] == 0
+
+    def config_label(self):
+        return f"/etc/wireguard/{self.iface}.conf"
+
+    def read_conf(self):
+        return self._helper("read-conf", self.iface)[1]
+
+    def write_conf(self, text):
+        self._helper("write-conf", self.iface, stdin=text)
+
+    def read_client_conf(self, name):
+        if not PEER_NAME_RE.match(name):
+            return None
+        code, out = self._helper("read-client", name, check=False)
+        return out if code == 0 else None
+
+    def is_active(self):
+        return self._helper("service", "is-active", self.iface, check=False)[1].strip() or "unknown"
+
+    def service(self, action):
+        self._helper("service", action, self.iface)
+
+    def syncconf(self):
+        self._helper("syncconf", self.iface)
+
+    def dump(self):
+        return self._helper("dump", self.iface, check=False)[1]
 
 
 class SSHRunner(_Base):
@@ -83,10 +138,15 @@ class SSHRunner(_Base):
         except (paramiko.SSHException, OSError) as exc:
             raise RemoteError(f"SSH connection to {server.ssh_host}:{server.ssh_port} failed: {exc}") from exc
         self.client.save_host_keys(str(KNOWN_HOSTS))
+        self.path = shlex.quote(server.config_path)
 
-    def _exec(self, command, stdin):
+    def run(self, command, stdin=None, check=True):
+        # Always go through bash so process substitution like <(...) works.
+        wrapped = f"bash -c {shlex.quote(command)}"
+        if self.server.use_sudo:
+            wrapped = f"sudo -n {wrapped}"
         try:
-            chan_in, chan_out, chan_err = self.client.exec_command(command, timeout=60)
+            chan_in, chan_out, chan_err = self.client.exec_command(wrapped, timeout=60)
             if stdin is not None:
                 chan_in.write(stdin)
                 chan_in.channel.shutdown_write()
@@ -95,7 +155,49 @@ class SSHRunner(_Base):
             code = chan_out.channel.recv_exit_status()
         except (paramiko.SSHException, OSError) as exc:
             raise RemoteError(f"SSH command failed: {exc}") from exc
-        return code, out, err
+        if check and code != 0:
+            raise RemoteError(f"`{command}` failed (exit {code}): {(err or out).strip()[:500]}")
+        return code, out
+
+    def whoami(self):
+        return self.run("id -un")[1].strip()
+
+    def wg_version(self):
+        code, out = self.run("wg --version", check=False)
+        return code == 0, out.strip()
+
+    def conf_readable(self):
+        return self.run(f"test -r {self.path}", check=False)[0] == 0
+
+    def config_label(self):
+        return self.server.config_path
+
+    def read_conf(self):
+        return self.run(f"cat {self.path}")[1]
+
+    def write_conf(self, text):
+        p = self.path
+        self.run(f"cp -p {p} {p}.privatevpn.bak")
+        self.run(f"umask 077 && cat > {p}.privatevpn.new && mv {p}.privatevpn.new {p} && chmod 600 {p}", stdin=text)
+
+    def read_client_conf(self, name):
+        if not PEER_NAME_RE.match(name) or not self.server.client_conf_dir:
+            return None
+        path = f"{self.server.client_conf_dir.rstrip('/')}/{name}.conf"
+        code, out = self.run(f"cat {shlex.quote(path)}", check=False)
+        return out if code == 0 else None
+
+    def is_active(self):
+        return self.run(f"systemctl is-active {self.unit}", check=False)[1].strip() or "unknown"
+
+    def service(self, action):
+        self.run(f"systemctl {action} {self.unit}")
+
+    def syncconf(self):
+        self.run(f"wg syncconf {self.iface} <(wg-quick strip {self.iface})")
+
+    def dump(self):
+        return self.run(f"wg show {self.iface} dump", check=False)[1]
 
     def close(self):
         self.client.close()

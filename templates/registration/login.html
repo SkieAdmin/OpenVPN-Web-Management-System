@@ -5,6 +5,7 @@
   <div class="card">
     <h1 style="margin-bottom:4px">Private<span style="color:var(--accent)">VPN</span></h1>
     <p class="sub" style="margin-bottom:18px">WireGuard server manager</p>
+    {% if locked_message %}<ul class="msgs"><li class="error">{{ locked_message }}</li></ul>{% endif %}
     {% if form.non_field_errors %}<ul class="msgs">{% for e in form.non_field_errors %}<li class="error">{{ e }}</li>{% endfor %}</ul>{% endif %}
     <form method="post">{% csrf_token %}
       {% include "_fields.html" with fields=form %}

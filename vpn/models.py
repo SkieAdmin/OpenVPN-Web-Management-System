@@ -1,4 +1,5 @@
 import ipaddress
+import re
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -12,8 +13,8 @@ class Server(models.Model):
     CONNECTION_SSH = "ssh"
     CONNECTION_LOCAL = "local"
     CONNECTION_CHOICES = [
-        (CONNECTION_SSH, "SSH (manage a remote Linux server)"),
         (CONNECTION_LOCAL, "Local (this app runs on the VPN server itself)"),
+        (CONNECTION_SSH, "SSH (manage a remote Linux server)"),
     ]
 
     name = models.CharField(max_length=64, unique=True)
@@ -26,7 +27,10 @@ class Server(models.Model):
     )
     listen_port = models.PositiveIntegerField(default=51820)
     interface = models.CharField(max_length=15, default="wg0")
-    config_path = models.CharField(max_length=255, default="/etc/wireguard/wg0.conf")
+    config_path = models.CharField(
+        max_length=255, default="/etc/wireguard/wg0.conf",
+        help_text="SSH mode only. Local mode always uses /etc/wireguard/<interface>.conf.",
+    )
     public_key = models.CharField(
         "Server public key", max_length=64, blank=True,
         help_text="Filled automatically by 'Import from server'.",
@@ -44,7 +48,7 @@ class Server(models.Model):
     mtu = models.PositiveIntegerField("Client MTU", null=True, blank=True)
 
     # Management connection
-    connection = models.CharField(max_length=8, choices=CONNECTION_CHOICES, default=CONNECTION_SSH)
+    connection = models.CharField(max_length=8, choices=CONNECTION_CHOICES, default=CONNECTION_LOCAL)
     ssh_host = models.CharField("SSH host", max_length=255, blank=True)
     ssh_port = models.PositiveIntegerField("SSH port", default=22)
     ssh_user = models.CharField("SSH user", max_length=64, default="root", blank=True)
@@ -61,7 +65,8 @@ class Server(models.Model):
     )
     client_conf_dir = models.CharField(
         max_length=255, default="/root", blank=True,
-        help_text="Where wireguard-install saved client .conf files (used to recover keys on import).",
+        help_text="SSH mode only: where wireguard-install saved client .conf files (used to recover keys on "
+                  "import). Local mode uses CLIENT_DIRS in the helper script.",
     )
     auto_apply = models.BooleanField(
         default=True, help_text="Push peer changes to the server immediately after every edit.",
@@ -107,6 +112,8 @@ class Server(models.Model):
             raise ValidationError({"public_key": "Not a valid WireGuard key."})
         if self.connection == self.CONNECTION_SSH and not self.ssh_host:
             raise ValidationError({"ssh_host": "Required for SSH connection."})
+        if not re.match(r"^[A-Za-z0-9_=+.-]{1,15}$", self.interface or ""):
+            raise ValidationError({"interface": "Invalid interface name, e.g. wg0."})
 
     def next_free_ipv4(self):
         v4, _ = self.addresses()

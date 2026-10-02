@@ -6,3 +6,4 @@ db.sqlite3
 known_hosts
 staticfiles/
 /.claude
+cache/

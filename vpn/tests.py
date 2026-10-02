@@ -36,7 +36,7 @@ PrivateKey = {PEER_PRIV}
 
 
 class FakeRunner:
-    """Stands in for SSH: keeps one file in memory and records commands."""
+    """Stands in for the server: keeps files in memory and records calls."""
 
     def __init__(self, files):
         self.files = files
@@ -48,19 +48,27 @@ class FakeRunner:
     def __exit__(self, *exc):
         pass
 
-    def run(self, command, stdin=None, check=True):
-        self.commands.append(command)
-        if command.startswith("cat ") and ">" not in command:
-            path = command[4:].strip("'")
-            if path in self.files:
-                return 0, self.files[path], ""
-            return 1, "", "No such file"
-        if "cat >" in command:
-            self.files["/etc/wireguard/wg0.conf"] = stdin
-            return 0, "", ""
-        if "is-active" in command:
-            return 0, "active\n", ""
-        return 0, "", ""
+    def config_label(self):
+        return "/etc/wireguard/wg0.conf"
+
+    def read_conf(self):
+        return self.files["/etc/wireguard/wg0.conf"]
+
+    def write_conf(self, text):
+        self.commands.append("write_conf")
+        self.files["/etc/wireguard/wg0.conf"] = text
+
+    def read_client_conf(self, name):
+        return self.files.get(f"/root/{name}.conf")
+
+    def is_active(self):
+        return "active"
+
+    def syncconf(self):
+        self.commands.append("wg syncconf")
+
+    def dump(self):
+        return ""
 
 
 class KeyTests(TestCase):
@@ -184,3 +192,56 @@ class ViewTests(TestCase):
 
     def test_login_required(self):
         self.assertEqual(self.client.get("/clients/").status_code, 302)
+
+
+class LocalRunnerTests(TestCase):
+    def setUp(self):
+        self.server = Server(name="local", connection=Server.CONNECTION_LOCAL, interface="wg0")
+
+    def _run(self, stdout="", code=0):
+        proc = mock.Mock(returncode=code, stdout=stdout, stderr="")
+        return mock.patch("vpn.remote.subprocess.run", return_value=proc)
+
+    def test_calls_helper_through_sudo(self):
+        with self._run("conf") as run, mock.patch("vpn.remote.os.geteuid", return_value=1000, create=True):
+            from .remote import HELPER, LocalRunner
+            self.assertEqual(LocalRunner(self.server).read_conf(), "conf")
+        self.assertEqual(run.call_args.args[0], ["sudo", "-n", HELPER, "read-conf", "wg0"])
+
+    def test_rejects_bad_interface(self):
+        from .remote import LocalRunner, RemoteError
+        self.server.interface = "wg0;rm -rf /"
+        with self.assertRaises(RemoteError):
+            LocalRunner(self.server)
+
+    def test_rejects_bad_client_name(self):
+        from .remote import LocalRunner
+        with self._run() as run:
+            self.assertIsNone(LocalRunner(self.server).read_client_conf("../../etc/shadow"))
+        run.assert_not_called()
+
+
+class AuthTests(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        User.objects.create_superuser("admin", "", "admin2027")
+
+    def test_default_password_forces_change(self):
+        self.client.post("/login/", {"username": "admin", "password": "admin2027"})
+        resp = self.client.get("/servers/")
+        self.assertRedirects(resp, "/password/")
+        resp = self.client.post("/password/", {
+            "old_password": "admin2027", "new_password1": "admin2027", "new_password2": "admin2027"})
+        self.assertEqual(resp.status_code, 200)  # default password rejected
+        resp = self.client.post("/password/", {
+            "old_password": "admin2027", "new_password1": "Tunnel-Horse-91", "new_password2": "Tunnel-Horse-91"})
+        self.assertRedirects(resp, "/")
+        self.assertEqual(self.client.get("/servers/").status_code, 200)
+
+    def test_lockout_after_failures(self):
+        for _ in range(5):
+            self.client.post("/login/", {"username": "admin", "password": "wrong"})
+        resp = self.client.post("/login/", {"username": "admin", "password": "admin2027"})
+        self.assertContains(resp, "Too many failed logins")
+        self.assertNotIn("_auth_user_id", self.client.session)

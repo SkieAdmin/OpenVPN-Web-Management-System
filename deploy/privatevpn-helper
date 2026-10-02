@@ -1,0 +1,86 @@
+#!/bin/bash
+# privatevpn-helper - the ONLY program the PrivateVPN web app may run as root.
+#
+# Installed to /usr/local/sbin/privatevpn-helper (root:root 0755) and allowed
+# through /etc/sudoers.d/privatevpn. Every argument is validated here, so a
+# bug in the web app cannot be turned into arbitrary root commands.
+set -euo pipefail
+umask 077
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+WG_DIR=/etc/wireguard
+# Where wireguard-install saved client .conf files (used to recover keys on import).
+CLIENT_DIRS=(/root)
+MAX_CONF_BYTES=1048576
+
+die() { echo "privatevpn-helper: $*" >&2; exit 2; }
+
+check_iface() {
+	[[ "${1:-}" =~ ^[A-Za-z0-9_=+.-]{1,15}$ ]] || die "invalid interface name"
+}
+
+conf_path() {
+	check_iface "${1:-}"
+	CONF="$WG_DIR/$1.conf"
+	[[ -f "$CONF" ]] || die "$CONF not found"
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+	whoami)
+		id -un
+		;;
+	version)
+		wg --version
+		;;
+	read-conf)
+		conf_path "${1:-}"
+		cat -- "$CONF"
+		;;
+	write-conf)
+		conf_path "${1:-}"
+		tmp=$(mktemp --suffix=.conf "$WG_DIR/pvtmp.XXXXXX")
+		trap 'rm -f -- "$tmp"' EXIT
+		head -c "$MAX_CONF_BYTES" > "$tmp"
+		grep -q '^\[Interface\]' "$tmp" || die "refusing to write: no [Interface] section"
+		grep -q '^PrivateKey *=' "$tmp" || die "refusing to write: no PrivateKey"
+		wg-quick strip "$tmp" > /dev/null || die "refusing to write: wg-quick cannot parse the new config"
+		cp -p -- "$CONF" "$CONF.privatevpn.bak"
+		chmod 600 -- "$tmp"
+		mv -f -- "$tmp" "$CONF"
+		trap - EXIT
+		;;
+	read-client)
+		name="${1:-}"
+		[[ "$name" =~ ^[A-Za-z0-9_-]{1,15}$ ]] || die "invalid client name"
+		for dir in "${CLIENT_DIRS[@]}"; do
+			if [[ -f "$dir/$name.conf" ]]; then
+				cat -- "$dir/$name.conf"
+				exit 0
+			fi
+		done
+		exit 1
+		;;
+	syncconf)
+		check_iface "${1:-}"
+		wg syncconf "$1" <(wg-quick strip "$1")
+		;;
+	dump)
+		check_iface "${1:-}"
+		wg show "$1" dump
+		;;
+	service)
+		action="${1:-}"
+		check_iface "${2:-}"
+		case "$action" in
+			start|stop|restart|enable) systemctl "$action" "wg-quick@$2" ;;
+			is-active) systemctl is-active "wg-quick@$2" || true ;;
+			*) die "invalid service action" ;;
+		esac
+		;;
+	*)
+		die "usage: whoami | version | read-conf IFACE | write-conf IFACE <stdin | read-client NAME | syncconf IFACE | dump IFACE | service start|stop|restart|enable|is-active IFACE"
+		;;
+esac

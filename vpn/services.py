@@ -1,6 +1,5 @@
 """Server operations: import, apply (sync peers), service control, status."""
 import ipaddress
-import shlex
 from dataclasses import dataclass, field
 from datetime import datetime, timezone as dt_timezone
 
@@ -21,45 +20,32 @@ class Result:
     details: list = field(default_factory=list)
 
 
-def _q(value):
-    return shlex.quote(str(value))
-
-
-def _unit(server):
-    return f"wg-quick@{server.interface}"
-
-
-def _read_conf(runner, server):
-    _, out, _ = runner.run(f"cat {_q(server.config_path)}")
-    return out
-
-
 # --- connection test ------------------------------------------------------
 
 def test_connection(server: Server) -> Result:
     try:
         with connect(server) as r:
-            _, who, _ = r.run("id -un")
-            code, ver, _ = r.run("wg --version", check=False)
-            code_conf, _, _ = r.run(f"test -r {_q(server.config_path)}", check=False)
+            who = r.whoami()
+            has_wg, version = r.wg_version()
+            readable = r.conf_readable()
+            label = r.config_label()
     except RemoteError as exc:
         return Result(False, str(exc))
-    details = [f"Logged in, commands run as: {who.strip()}"]
-    details.append(ver.strip() if code == 0 else "WARNING: `wg` not found. Install wireguard-tools.")
-    details.append(
-        f"{server.config_path} readable" if code_conf == 0
-        else f"WARNING: cannot read {server.config_path} (wrong path or missing root/sudo)"
-    )
-    return Result(code == 0 and code_conf == 0, "Connection OK" if code == 0 else "Connected with warnings", details)
+    details = [f"Commands run as: {who}"]
+    details.append(version if has_wg else "WARNING: `wg` not found. Install wireguard-tools.")
+    details.append(f"{label} readable" if readable
+                   else f"WARNING: cannot read {label} (wrong interface/path or missing root)")
+    ok = has_wg and readable
+    return Result(ok, "Connection OK" if ok else "Connected with warnings", details)
 
 
 # --- import ---------------------------------------------------------------
 
 def import_from_server(server: Server) -> Result:
-    """Read the server's wg0.conf, fill server settings and create Client rows for unknown peers."""
+    """Read the server config, fill server settings and create Client rows for unknown peers."""
     try:
         with connect(server) as r:
-            conf = wg.parse_server_config(_read_conf(r, server))
+            conf = wg.parse_server_config(r.read_conf())
             iface = conf.interface.values
 
             priv = iface.get("PrivateKey", "")
@@ -100,10 +86,9 @@ def import_from_server(server: Server) -> Result:
                     n += 1
 
                 private_key = ""
-                if peer.name and server.client_conf_dir:
-                    path = f"{server.client_conf_dir.rstrip('/')}/{peer.name}.conf"
-                    code, text, _ = r.run(f"cat {_q(path)}", check=False)
-                    if code == 0:
+                if peer.name:
+                    text = r.read_client_conf(peer.name)
+                    if text:
                         candidate = wg.parse_client_config(text)["interface"].get("PrivateKey", "")
                         if wg.is_valid_key(candidate) and wg.public_key_from_private(candidate) == pub:
                             private_key = candidate
@@ -151,7 +136,7 @@ def apply_to_server(server: Server, force: bool = False) -> Result:
     """Rewrite the [Peer] part of the server config from the database and hot-reload WireGuard."""
     try:
         with connect(server) as r:
-            current = _read_conf(r, server)
+            current = r.read_conf()
             new_text, unknown = build_server_config(server, current)
             if unknown and not force:
                 return Result(
@@ -160,31 +145,26 @@ def apply_to_server(server: Server, force: bool = False) -> Result:
                     f"(or 'Force apply' to delete them).",
                     [f"Unknown peer: {k}" for k in unknown],
                 )
+            live = r.is_active()
             if new_text == current:
-                live = r.run(f"systemctl is-active {_q(_unit(server))}", check=False)[1].strip()
                 server.last_applied_at = timezone.now()
                 server.save(update_fields=["last_applied_at"])
                 return Result(True, "Server already up to date.", [f"Service: {live}"])
 
-            path = _q(server.config_path)
-            r.run(f"cp -p {path} {path}.privatevpn.bak")
-            r.run(f"umask 077 && cat > {path}.privatevpn.new && mv {path}.privatevpn.new {path}", stdin=new_text)
-            r.run(f"chmod 600 {path}")
-
-            live = r.run(f"systemctl is-active {_q(_unit(server))}", check=False)[1].strip()
+            r.write_conf(new_text)
             if live == "active":
-                iface = _q(server.interface)
-                r.run(f"wg syncconf {iface} <(wg-quick strip {iface})")
+                r.syncconf()
                 note = "Reloaded live (no one was disconnected)."
             else:
                 note = f"Config saved. Service is '{live}', start it to use the VPN."
+            backup = f"{r.config_label()}.privatevpn.bak"
     except RemoteError as exc:
         return Result(False, str(exc))
 
     server.last_applied_at = timezone.now()
     server.save(update_fields=["last_applied_at"])
     active = sum(1 for c in server.clients.all() if c.is_active)
-    return Result(True, f"Applied {active} active peer(s). {note}", [f"Backup: {server.config_path}.privatevpn.bak"])
+    return Result(True, f"Applied {active} active peer(s). {note}", [f"Backup: {backup}"])
 
 
 # --- service + status -----------------------------------------------------
@@ -194,25 +174,26 @@ def service_action(server: Server, action: str) -> Result:
         return Result(False, f"Unknown action {action}")
     try:
         with connect(server) as r:
-            r.run(f"systemctl {action} {_q(_unit(server))}")
+            r.service(action)
             if action != "stop":
-                r.run(f"systemctl enable {_q(_unit(server))}", check=False)
-            live = r.run(f"systemctl is-active {_q(_unit(server))}", check=False)[1].strip()
+                try:
+                    r.service("enable")
+                except RemoteError:
+                    pass
+            live = r.is_active()
     except RemoteError as exc:
         return Result(False, str(exc))
     server.last_status = live
     server.last_checked_at = timezone.now()
     server.save(update_fields=["last_status", "last_checked_at"])
-    return Result(True, f"{_unit(server)} {action}: now {live}")
+    return Result(True, f"wg-quick@{server.interface} {action}: now {live}")
 
 
 def refresh_status(server: Server) -> Result:
     try:
         with connect(server) as r:
-            live = r.run(f"systemctl is-active {_q(_unit(server))}", check=False)[1].strip() or "unknown"
-            dump = ""
-            if live == "active":
-                dump = r.run(f"wg show {_q(server.interface)} dump", check=False)[1]
+            live = r.is_active()
+            dump = r.dump() if live == "active" else ""
     except RemoteError as exc:
         server.last_status = "unreachable"
         server.last_checked_at = timezone.now()

@@ -1,62 +1,123 @@
-# PrivateVPN
+# PrivateVPN – WireGuard Web Management
 
 A small Django web app for managing a WireGuard VPN server: services, VPN users (one per device), login accounts, and config downloads with QR codes.
 
-It runs on your Windows PC and controls the Linux server over SSH. It can also run on the server itself (choose "Local" as the connection type).
-
-## Start
-
-Double-click `start.bat`, then open http://127.0.0.1:8905/
-
-The first login is `admin` / `admin2027`. **Change it right away** (click your username at the top right).
-
-To start it manually:
+It is installed **on the VPN server itself**. You use it from your desktop or laptop in a browser.
 
 ```
-.venv\Scripts\python.exe manage.py migrate
-.venv\Scripts\python.exe manage.py bootstrap_admin
-.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8905
+Desktop / Laptop ──HTTPS──▶ nginx :8443 ──▶ gunicorn (user "privatevpn") ──sudo──▶ privatevpn-helper ──▶ wg / wg-quick / systemd
 ```
 
-## First-time setup
+The web app never runs as root. The only thing it can run as root is `/usr/local/sbin/privatevpn-helper`, a short script that checks every argument. It can only:
 
-1. **Services → Add service**
-   - Public endpoint: your server IP, e.g. `103.164.54.159`
-   - Connection: SSH, host = the same IP, user `root`
-   - SSH private key file: e.g. `C:\Users\you\.ssh\id_ed25519` (recommended). A password also works.
-   - Keep the other defaults if the server was installed with the `wireguard-install` script.
-2. Open the service and click **1. Test connection**.
-3. Click **2. Import from server**. This reads the server public key and your existing peers, so nobody gets disconnected. If the matching client `.conf` files are still in `/root`, their private keys are recovered and those configs become downloadable.
-4. **VPN Users → Add VPN user**. The app generates the keys and picks the next free IP. With auto-apply on, the server is updated straight away using `wg syncconf`, so current connections are not dropped.
-5. Click **Download .conf** (or scan the QR code on a phone) and import it in the WireGuard app.
+- read or write `/etc/wireguard/<iface>.conf`
+- reload WireGuard
+- start, stop or restart `wg-quick@<iface>`
+- read peer stats
 
-## Roles
+## Install on the server
 
-- **Admin accounts** (`is_staff`) manage services, VPN users, accounts and the activity log.
-- **Normal accounts** only see the VPN users they own, and can download those configs.
+The server needs WireGuard already working (for example, installed with `wireguard-install.sh`). Debian, Ubuntu, and Fedora/RHEL-style systems are supported.
 
-Set the **Owner** on a VPN user to give an account access to it.
+```bash
+git clone https://github.com/SkieAdmin/OpenVPN-Web-Management-System.git
+cd OpenVPN-Web-Management-System
+sudo bash deploy/install.sh
+```
 
-## How "Apply" works
+By default, the panel can **only be reached through the VPN**:
 
-1. Reads the server config (`/etc/wireguard/wg0.conf`).
-2. Keeps the `[Interface]` part exactly as it is.
-3. Replaces all `[Peer]` blocks with the active VPN users from this app. It uses the same `# BEGIN_PEER` format as the `wireguard-install` script, so that script keeps working.
-4. Saves a backup at `wg0.conf.privatevpn.bak`.
-5. Hot-reloads WireGuard with `wg syncconf`.
+1. Connect WireGuard on your desktop or laptop.
+2. Open `https://10.7.0.1:8443`.
+3. Accept the self-signed certificate warning once.
 
-Apply refuses to run if the server has peers this app doesn't know about. Run Import first. "Force apply" deletes those unknown peers instead.
+Options:
 
-Disabled and expired users are left out of the server config. They stay in the database, so you can turn them back on later.
+| Flag | Meaning |
+|---|---|
+| `--public` | Also reachable from the internet at `https://<server-ip>:8443` |
+| `--port 9443` | Use another HTTPS port |
+| `--interface wg1` | WireGuard interface (default `wg0`) |
+| `--endpoint vpn.example.com` | Public address written into client configs (auto-detected otherwise) |
 
-## Security notes
+The installer:
 
-- `db.sqlite3` holds every client private key, plus the SSH password if you saved one. Keep this folder private and back it up.
-- Only use the app from `127.0.0.1`. If you expose it on a network, set `PRIVATEVPN_DEBUG=0`, `PRIVATEVPN_ALLOWED_HOSTS`, and use HTTPS with a strong admin password.
-- The SSH host key is pinned in `known_hosts` the first time you connect. If the server is reinstalled, delete its line from that file.
-- If the SSH user is not root, tick **use sudo**. That user needs passwordless sudo for `wg`, `wg-quick`, `systemctl`, `cat`, `cp`, `mv` and `chmod`.
+- creates the `privatevpn` user
+- copies the app to `/opt/privatevpn`
+- sets up a Python virtual environment with gunicorn
+- installs the helper and its sudo rule
+- writes `/etc/privatevpn.env`
+- creates a self-signed TLS certificate
+- configures nginx and opens the firewall port
+- starts the `privatevpn` service
+- **registers your existing `wg0` and imports its peers**, so nobody gets disconnected
 
-## Tests
+First login: `admin` / `admin2027`. You are **forced to choose a new password** straight away.
+
+### Update
+
+```bash
+cd OpenVPN-Web-Management-System
+git pull
+sudo bash deploy/install.sh
+```
+
+Re-running the installer keeps the database, settings and certificate.
+
+### Useful commands
+
+```bash
+systemctl status privatevpn
+```
+
+```bash
+journalctl -u privatevpn -f
+```
+
+```bash
+sudo nano /etc/privatevpn.env && sudo systemctl restart privatevpn
+```
+
+| Path | What |
+|---|---|
+| `/opt/privatevpn` | App code (owned by root) |
+| `/var/lib/privatevpn/db.sqlite3` | Database, including client private keys. **Back it up.** |
+| `/etc/privatevpn.env` | Settings (secret key, allowed hosts) |
+| `/etc/privatevpn/tls.*` | TLS certificate |
+| `/etc/wireguard/wg0.conf.privatevpn.bak` | Server config before the last Apply |
+
+## Using it
+
+- **Services**
+  - Shows the WireGuard server: status, start, stop, restart.
+  - **Import from server** pulls in peers that were added outside the app.
+  - **Apply to server** pushes changes. It reloads live with `wg syncconf`, so nobody is disconnected.
+- **VPN Users**
+  - Each device gets its own keys and the next free IP.
+  - You can enable, disable, set an expiry date, make new keys, or delete.
+  - **Download .conf** or scan the QR code on a phone.
+- **Accounts**
+  - **Admins** manage everything.
+  - **Normal accounts** only see the VPN users where they are set as **Owner**, and can download those configs.
+- **Activity**
+  - Every change, config download, and login (including failed ones).
+
+Peers are written in the same `# BEGIN_PEER name` format as `wireguard-install.sh`, so that script keeps working too.
+
+## Security
+
+- **Login lockout:** after 5 wrong passwords, that username and IP are locked out for 15 minutes. The IP is also blocked after 20 failures across all usernames.
+- **VPN-only by default.** Only use `--public` if people must download configs without the VPN, and use strong passwords if you do.
+- **Private keys are stored in the database.** Anyone with root on the server can read them anyway.
+- **Unsure a key is safe?** Leaked keys: open the VPN user and click **Regenerate keys**.
+
+## Development on Windows
+
+`start.bat` runs a local copy at http://127.0.0.1:8000.
+
+It can manage a remote server over SSH: add a service with Connection = **SSH**.
+
+Run the tests:
 
 ```
 .venv\Scripts\python.exe manage.py test vpn
