@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ server.name }}{% endblock %}
+{% block content %}
+<div class="head">
+  <div><h1>{{ server.name }} {% include "vpn/_status_pill.html" with status=server.last_status %}</h1>
+  <p class="sub">{{ server.description|default:"WireGuard service" }}{% if server.last_checked_at %} · checked {{ server.last_checked_at|timesince }} ago{% endif %}</p></div>
+  <div class="actions">
+    <a class="btn" href="{% url 'server_edit' server.pk %}">Edit</a>
+    <a class="btn primary" href="{% url 'client_form' %}?server={{ server.pk }}">Add VPN user</a>
+  </div>
+</div>
+
+<div class="cols">
+  <div class="card">
+    <h2>Service control</h2>
+    <div class="actions" style="margin-bottom:14px">
+      <form class="inline" method="post" action="{% url 'server_action' server.pk 'status' %}">{% csrf_token %}<button>Refresh status</button></form>
+      <form class="inline" method="post" action="{% url 'server_action' server.pk 'start' %}">{% csrf_token %}<button>Start</button></form>
+      <form class="inline" method="post" action="{% url 'server_action' server.pk 'restart' %}" onsubmit="return confirm('Restart drops all connected users for a few seconds. Continue?')">{% csrf_token %}<button>Restart</button></form>
+      <form class="inline" method="post" action="{% url 'server_action' server.pk 'stop' %}" onsubmit="return confirm('Stop the VPN for everyone?')">{% csrf_token %}<button class="danger">Stop</button></form>
+    </div>
+    <h2>Setup &amp; sync</h2>
+    <div class="actions">
+      <form class="inline" method="post" action="{% url 'server_action' server.pk 'test' %}">{% csrf_token %}<button>1. Test connection</button></form>
+      <form class="inline" method="post" action="{% url 'server_action' server.pk 'import' %}">{% csrf_token %}<button>2. Import from server</button></form>
+      <form class="inline" method="post" action="{% url 'server_action' server.pk 'apply' %}">{% csrf_token %}<button class="primary">Apply to server</button></form>
+      <form class="inline" method="post" action="{% url 'server_action' server.pk 'apply' %}" onsubmit="return confirm('Force apply deletes every peer on the server that is not listed in this app. Continue?')">{% csrf_token %}<input type="hidden" name="force" value="1"><button class="danger sm">Force apply</button></form>
+    </div>
+    <p class="muted" style="font-size:13px;margin-bottom:0">Import reads existing peers so nobody gets cut off. Apply rewrites the peer list in <code>{{ server.config_path }}</code> (backup kept) and reloads WireGuard without disconnecting anyone.
+    {% if server.last_applied_at %}Last applied {{ server.last_applied_at|timesince }} ago.{% endif %}</p>
+  </div>
+
+  <div class="card">
+    <h2>Settings</h2>
+    <dl class="kv">
+      <dt>Endpoint</dt><dd><code>{{ server.endpoint }}</code></dd>
+      <dt>Interface</dt><dd><code>{{ server.interface }}</code> · <code>{{ server.config_path }}</code></dd>
+      <dt>Server address</dt><dd><code>{{ server.server_address }}</code></dd>
+      <dt>Public key</dt><dd>{% if server.public_key %}<code>{{ server.public_key }}</code>{% else %}<span class="pill warn">missing — run Import</span>{% endif %}</dd>
+      <dt>Client DNS</dt><dd>{{ server.dns|default:"—" }}</dd>
+      <dt>Client AllowedIPs</dt><dd><code>{{ server.client_allowed_ips }}</code></dd>
+      <dt>Managed via</dt><dd>{% if server.connection == "ssh" %}SSH {{ server.ssh_user }}@{{ server.ssh_host }}:{{ server.ssh_port }}{% if server.use_sudo %} (sudo){% endif %}{% else %}local commands{% endif %}</dd>
+      <dt>Auto-apply</dt><dd>{{ server.auto_apply|yesno:"on,off" }}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="card">
+  <h2>VPN users on this service ({{ clients|length }})</h2>
+  {% include "vpn/_client_rows.html" with show_server=False %}
+</div>
+{% endblock %}

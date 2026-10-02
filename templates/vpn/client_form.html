@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{% if client %}Edit {{ client.name }}{% else %}Add VPN user{% endif %}{% endblock %}
+{% block content %}
+<div class="head">
+  <div><h1>{% if client %}Edit {{ client.name }}{% else %}Add VPN user{% endif %}</h1>
+  <p class="sub">{% if client %}Keys stay the same, so the device keeps working.{% else %}Keys and address are generated for you.{% endif %}</p></div>
+</div>
+<form method="post" class="card" style="max-width:720px">{% csrf_token %}
+  {% if form.non_field_errors %}<ul class="msgs">{% for e in form.non_field_errors %}<li class="error">{{ e }}</li>{% endfor %}</ul>{% endif %}
+  <div class="two">{% include "_fields.html" with fields=form %}</div>
+  <div class="actions">
+    <button class="primary" type="submit">Save</button>
+    <a class="btn" href="{% if client %}{% url 'client_detail' client.pk %}{% else %}{% url 'client_list' %}{% endif %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

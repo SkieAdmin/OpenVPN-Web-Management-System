@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{% if user.is_staff %}VPN users{% else %}My devices{% endif %}{% endblock %}
+{% block content %}
+<div class="head">
+  <div><h1>{% if user.is_staff %}VPN users{% else %}My devices{% endif %}</h1>
+  <p class="sub">{% if user.is_staff %}One entry per device. Each gets its own keys and address.{% else %}Download a config and import it in the WireGuard app.{% endif %}</p></div>
+  {% if user.is_staff %}<a class="btn primary" href="{% url 'client_form' %}">Add VPN user</a>{% endif %}
+</div>
+<div class="card">
+  <form class="filters" method="get">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search name, IP, owner…">
+    {% if servers %}<select name="server"><option value="">All services</option>
+      {% for s in servers %}<option value="{{ s.pk }}" {% if server_id == s.pk|stringformat:"d" %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+    </select>{% endif %}
+    <select name="state">
+      <option value="">Any state</option>
+      <option value="enabled" {% if state == "enabled" %}selected{% endif %}>Enabled</option>
+      <option value="disabled" {% if state == "disabled" %}selected{% endif %}>Disabled</option>
+    </select>
+    <button type="submit">Filter</button>
+  </form>
+  {% include "vpn/_client_rows.html" with show_server=True %}
+</div>
+{% endblock %}

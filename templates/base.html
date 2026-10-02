@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}PrivateVPN{% endblock %} · PrivateVPN</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --panel-2:#f0f2f5; --border:#dde1e7; --text:#1b1f24; --muted:#5f6b7a;
+  --accent:#2f6fed; --accent-ink:#ffffff; --ok:#1f8a4c; --ok-bg:#e3f5ea; --bad:#c23a3a; --bad-bg:#fbe7e7;
+  --warn:#9a6700; --warn-bg:#fff4d6; --info-bg:#e8effd; --code:#f3f4f6;
+  --radius:10px; --shadow:0 1px 2px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0f1216; --panel:#171b21; --panel-2:#1e232b; --border:#2a313b; --text:#e6e9ee; --muted:#93a0b1;
+    --accent:#5b8cff; --accent-ink:#0b0e12; --ok:#4cc483; --ok-bg:#12291d; --bad:#ff7a7a; --bad-bg:#2e1515;
+    --warn:#e8b64c; --warn-bg:#2b230f; --info-bg:#162238; --code:#11151a; --shadow:none;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+header{background:var(--panel);border-bottom:1px solid var(--border)}
+.bar{max-width:1180px;margin:0 auto;padding:0 16px;display:flex;align-items:center;gap:20px;min-height:56px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:.2px;color:var(--text)} .brand span{color:var(--accent)}
+nav{display:flex;gap:4px;flex-wrap:wrap;flex:1}
+nav a{color:var(--muted);padding:6px 10px;border-radius:8px} nav a:hover,nav a.on{background:var(--panel-2);color:var(--text);text-decoration:none}
+.who{display:flex;gap:10px;align-items:center;color:var(--muted);font-size:14px}
+main{max-width:1180px;margin:0 auto;padding:24px 16px 60px}
+h1{font-size:24px;margin:0} h2{font-size:17px;margin:0 0 12px}
+.head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+.sub{color:var(--muted);margin:4px 0 0}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);margin-bottom:18px}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:18px}
+.stat{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.stat b{display:block;font-size:26px} .stat span{color:var(--muted);font-size:13px}
+.cols{display:grid;gap:18px;grid-template-columns:1fr 1fr} @media(max-width:860px){.cols{grid-template-columns:1fr}}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse} th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:600} tr:last-child td{border-bottom:0}
+.btn,button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);
+  padding:7px 12px;border-radius:8px;font:inherit;font-size:14px;cursor:pointer;white-space:nowrap}
+.btn:hover,button:hover{text-decoration:none;border-color:var(--muted)}
+.btn.primary,button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.danger,button.danger{color:var(--bad);border-color:var(--bad)}
+.btn.sm,button.sm{padding:4px 9px;font-size:13px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center} form.inline{display:inline}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--panel-2);color:var(--muted)}
+.pill.ok{background:var(--ok-bg);color:var(--ok)} .pill.bad{background:var(--bad-bg);color:var(--bad)} .pill.warn{background:var(--warn-bg);color:var(--warn)}
+.msgs{list-style:none;padding:0;margin:0 0 18px;display:grid;gap:6px}
+.msgs li{padding:9px 12px;border-radius:8px;background:var(--info-bg);font-size:14px;word-break:break-word}
+.msgs .success{background:var(--ok-bg);color:var(--ok)} .msgs .error{background:var(--bad-bg);color:var(--bad)} .msgs .warning{background:var(--warn-bg);color:var(--warn)}
+.field{margin-bottom:14px} .field label{display:block;font-weight:600;font-size:14px;margin-bottom:4px}
+.field .help{color:var(--muted);font-size:13px;margin-top:3px}
+.field .err{color:var(--bad);font-size:13px;margin-top:3px}
+.field.check label{display:flex;gap:8px;align-items:center;font-weight:500}
+input[type=text],input[type=password],input[type=number],input[type=email],input[type=datetime-local],select,textarea{
+  width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font:inherit}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+fieldset{border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px 4px;margin:0 0 16px}
+legend{font-weight:700;padding:0 6px}
+.two{display:grid;gap:0 16px;grid-template-columns:1fr 1fr} @media(max-width:700px){.two{grid-template-columns:1fr}}
+code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}
+pre{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;white-space:pre}
+dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;margin:0} dl.kv dt{color:var(--muted)} dl.kv dd{margin:0;word-break:break-all}
+.qr{background:#fff;border-radius:8px;padding:10px;display:inline-block} .qr svg{display:block;width:240px;height:240px}
+.muted{color:var(--muted)} .empty{color:var(--muted);text-align:center;padding:24px}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px} .filters input,.filters select{width:auto;min-width:160px}
+.login{max-width:380px;margin:9vh auto}
+</style>
+</head>
+<body>
+{% if user.is_authenticated %}
+<header><div class="bar">
+  <a class="brand" href="{% url 'dashboard' %}">Private<span>VPN</span></a>
+  {% with p=request.resolver_match.url_name %}
+  <nav>
+    <a href="{% url 'dashboard' %}" class="{% if p == 'dashboard' %}on{% endif %}">Dashboard</a>
+    {% if user.is_staff %}<a href="{% url 'server_list' %}" class="{% if 'server' in p %}on{% endif %}">Services</a>{% endif %}
+    <a href="{% url 'client_list' %}" class="{% if 'client' in p %}on{% endif %}">{% if user.is_staff %}VPN Users{% else %}My Devices{% endif %}</a>
+    {% if user.is_staff %}
+    <a href="{% url 'account_list' %}" class="{% if 'account' in p %}on{% endif %}">Accounts</a>
+    <a href="{% url 'audit_log' %}" class="{% if p == 'audit_log' %}on{% endif %}">Activity</a>
+    {% endif %}
+  </nav>
+  {% endwith %}
+  <div class="who">
+    <a href="{% url 'password_change' %}">{{ user.username }}</a>
+    <form class="inline" method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="sm" type="submit">Log out</button></form>
+  </div>
+</div></header>
+{% endif %}
+<main>
+  {% if messages %}<ul class="msgs">{% for m in messages %}<li class="{{ m.tags }}">{{ m }}</li>{% endfor %}</ul>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -1,0 +1,13 @@
+<div class="table-wrap"><table>
+  <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Result</th></tr></thead>
+  <tbody>{% for l in logs %}
+    <tr>
+      <td class="muted" title="{{ l.created_at }}">{{ l.created_at|date:"M j, H:i" }}</td>
+      <td>{{ l.user.username|default:"—" }}</td>
+      <td><code>{{ l.action }}</code></td>
+      <td>{{ l.target }}</td>
+      <td>{% if l.success %}<span class="pill ok">ok</span>{% else %}<span class="pill bad" title="{{ l.detail }}">failed</span>{% endif %}
+        {% if l.detail %}<div class="muted" style="font-size:12px;white-space:pre-line">{{ l.detail|truncatechars:220 }}</div>{% endif %}</td>
+    </tr>
+  {% empty %}<tr><td colspan="5" class="empty">Nothing yet.</td></tr>{% endfor %}</tbody>
+</table></div>

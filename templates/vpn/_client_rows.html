@@ -1,0 +1,35 @@
+{% load vpn_extras %}
+<div class="table-wrap"><table>
+  <thead><tr>
+    <th>Name</th>{% if show_server %}<th>Service</th>{% endif %}<th>Address</th><th>Owner</th><th>State</th><th>Last seen</th><th>Traffic ↓/↑</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for c in clients %}
+    <tr>
+      <td><a href="{% url 'client_detail' c.pk %}"><b>{{ c.name }}</b></a>{% if c.imported and not c.private_key %} <span class="pill warn" title="Imported without private key">no key</span>{% endif %}</td>
+      {% if show_server %}<td>{{ c.server.name }}</td>{% endif %}
+      <td><code>{{ c.ipv4 }}</code></td>
+      <td>{{ c.owner.username|default:"—" }}</td>
+      <td>
+        {% if c.is_expired %}<span class="pill bad">expired</span>
+        {% elif not c.enabled %}<span class="pill bad">disabled</span>
+        {% elif c.is_online %}<span class="pill ok">online</span>
+        {% else %}<span class="pill">enabled</span>{% endif %}
+      </td>
+      <td class="muted">{% if c.last_handshake %}{{ c.last_handshake|timesince }} ago{% else %}—{% endif %}</td>
+      <td class="muted">{{ c.rx_bytes|bytes_human }} / {{ c.tx_bytes|bytes_human }}</td>
+      <td><div class="actions">
+        {% if c.can_download %}<a class="btn sm" href="{% url 'client_download' c.pk %}">Download</a>{% endif %}
+        {% if user.is_staff %}
+        <form class="inline" method="post" action="{% url 'client_toggle' c.pk %}">{% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button class="sm" type="submit">{% if c.enabled %}Disable{% else %}Enable{% endif %}</button>
+        </form>
+        {% endif %}
+      </div></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="8" class="empty">No VPN users yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>

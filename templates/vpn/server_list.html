@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Services{% endblock %}
+{% block content %}
+<div class="head">
+  <div><h1>VPN services</h1><p class="sub">WireGuard servers this app manages.</p></div>
+  <a class="btn primary" href="{% url 'server_form' %}">Add service</a>
+</div>
+<div class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th>Endpoint</th><th>Interface</th><th>Managed via</th><th>Status</th><th>Users</th><th></th></tr></thead>
+    <tbody>{% for s in servers %}
+      <tr>
+        <td><a href="{% url 'server_detail' s.pk %}"><b>{{ s.name }}</b></a><div class="muted" style="font-size:13px">{{ s.description }}</div></td>
+        <td><code>{{ s.endpoint }}</code></td>
+        <td><code>{{ s.interface }}</code></td>
+        <td>{% if s.connection == "ssh" %}SSH {{ s.ssh_user }}@{{ s.ssh_host }}{% else %}local{% endif %}</td>
+        <td>{% include "vpn/_status_pill.html" with status=s.last_status %}</td>
+        <td>{{ s.n_enabled }} / {{ s.n_clients }}</td>
+        <td><a class="btn sm" href="{% url 'server_edit' s.pk %}">Edit</a></td>
+      </tr>
+    {% empty %}<tr><td colspan="7" class="empty">No services yet.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+{% endblock %}

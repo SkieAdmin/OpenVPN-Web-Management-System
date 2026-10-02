@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="head">
+  <div><h1>Dashboard</h1><p class="sub">Hi {{ user.get_short_name|default:user.username }}.</p></div>
+  {% if user.is_staff %}<div class="actions">
+    <a class="btn" href="{% url 'server_form' %}">Add service</a>
+    <a class="btn primary" href="{% url 'client_form' %}">Add VPN user</a>
+  </div>{% endif %}
+</div>
+
+<div class="grid">
+  {% if user.is_staff %}<div class="stat"><b>{{ servers|length }}</b><span>VPN services</span></div>{% endif %}
+  <div class="stat"><b>{{ client_total }}</b><span>{% if user.is_staff %}VPN users{% else %}My devices{% endif %}</span></div>
+  <div class="stat"><b>{{ client_enabled }}</b><span>Enabled</span></div>
+  <div class="stat"><b>{{ client_online }}</b><span>Online (last refresh)</span></div>
+  {% if user.is_staff %}<div class="stat"><b>{{ account_total }}</b><span>Accounts</span></div>{% endif %}
+</div>
+
+{% if user.is_staff %}
+<div class="card">
+  <h2>VPN services</h2>
+  {% if servers %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th>Endpoint</th><th>Status</th><th>Users</th><th>Last applied</th><th></th></tr></thead>
+    <tbody>{% for s in servers %}
+      <tr>
+        <td><a href="{% url 'server_detail' s.pk %}"><b>{{ s.name }}</b></a></td>
+        <td><code>{{ s.endpoint }}</code></td>
+        <td>{% include "vpn/_status_pill.html" with status=s.last_status %}</td>
+        <td>{{ s.n_clients }}</td>
+        <td class="muted">{% if s.last_applied_at %}{{ s.last_applied_at|timesince }} ago{% else %}never{% endif %}</td>
+        <td><form class="inline" method="post" action="{% url 'server_action' s.pk 'status' %}">{% csrf_token %}
+          <input type="hidden" name="next" value="{% url 'dashboard' %}"><button class="sm">Refresh</button></form></td>
+      </tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="empty">No services yet. <a href="{% url 'server_form' %}">Add your WireGuard server</a> to start.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{% if user.is_staff %}Recent VPN users{% else %}My devices{% endif %}</h2>
+  {% include "vpn/_client_rows.html" with show_server=True %}
+  {% if client_total > 10 %}<p><a href="{% url 'client_list' %}">See all {{ client_total }} →</a></p>{% endif %}
+</div>
+
+{% if user.is_staff and logs %}
+<div class="card">
+  <h2>Recent activity</h2>
+  {% include "vpn/_log_rows.html" %}
+</div>
+{% endif %}
+{% endblock %}

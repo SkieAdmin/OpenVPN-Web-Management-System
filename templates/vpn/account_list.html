@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Accounts{% endblock %}
+{% block content %}
+<div class="head">
+  <div><h1>Accounts</h1><p class="sub">People who can log in. Admins manage everything; normal users only see and download their own devices.</p></div>
+  <a class="btn primary" href="{% url 'account_form' %}">Add account</a>
+</div>
+<div class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Status</th><th>Devices</th><th>Last login</th><th></th></tr></thead>
+    <tbody>{% for u in users %}
+      <tr>
+        <td><b>{{ u.username }}</b>{% if u == user %} <span class="pill">you</span>{% endif %}</td>
+        <td>{{ u.get_full_name|default:"—" }}</td>
+        <td>{% if u.is_staff %}<span class="pill ok">admin</span>{% else %}<span class="pill">user</span>{% endif %}</td>
+        <td>{% if u.is_active %}active{% else %}<span class="pill bad">disabled</span>{% endif %}</td>
+        <td><a href="{% url 'client_list' %}?q={{ u.username|urlencode }}">{{ u.n_clients }}</a></td>
+        <td class="muted">{% if u.last_login %}{{ u.last_login|timesince }} ago{% else %}never{% endif %}</td>
+        <td><div class="actions"><a class="btn sm" href="{% url 'account_edit' u.pk %}">Edit</a>
+          {% if u != user %}<a class="btn sm danger" href="{% url 'account_delete' u.pk %}">Delete</a>{% endif %}</div></td>
+      </tr>
+    {% endfor %}</tbody>
+  </table></div>
+</div>
+{% endblock %}

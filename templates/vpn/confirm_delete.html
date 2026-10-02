@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ kind }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:560px">
+  <h1 style="margin-bottom:10px">Delete {{ kind }} “{{ object }}”?</h1>
+  <p>{{ warning }}</p>
+  <form method="post" class="actions">{% csrf_token %}
+    <button class="danger" type="submit">Yes, delete</button>
+    <a class="btn" href="javascript:history.back()">Cancel</a>
+  </form>
+</div>
+{% endblock %}

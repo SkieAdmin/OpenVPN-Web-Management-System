@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{% if account %}Edit {{ account.username }}{% else %}Add account{% endif %}{% endblock %}
+{% block content %}
+<div class="head"><div><h1>{% if account %}Edit {{ account.username }}{% else %}Add account{% endif %}</h1></div></div>
+<form method="post" class="card" style="max-width:720px">{% csrf_token %}
+  {% if form.non_field_errors %}<ul class="msgs">{% for e in form.non_field_errors %}<li class="error">{{ e }}</li>{% endfor %}</ul>{% endif %}
+  <div class="two">{% include "_fields.html" with fields=form %}</div>
+  <div class="actions">
+    <button class="primary" type="submit">Save</button>
+    <a class="btn" href="{% url 'account_list' %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

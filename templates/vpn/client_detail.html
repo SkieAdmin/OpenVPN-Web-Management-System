@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% load vpn_extras %}
+{% block title %}{{ client.name }}{% endblock %}
+{% block content %}
+<div class="head">
+  <div><h1>{{ client.name }}
+    {% if client.is_expired %}<span class="pill bad">expired</span>{% elif not client.enabled %}<span class="pill bad">disabled</span>{% elif client.is_online %}<span class="pill ok">online</span>{% else %}<span class="pill">enabled</span>{% endif %}</h1>
+  <p class="sub">{{ client.server.name }} · <code>{{ client.ipv4 }}</code></p></div>
+  <div class="actions">
+    {% if client.can_download %}<a class="btn primary" href="{% url 'client_download' client.pk %}">Download .conf</a>{% endif %}
+    {% if user.is_staff %}
+      <a class="btn" href="{% url 'client_edit' client.pk %}">Edit</a>
+      <form class="inline" method="post" action="{% url 'client_toggle' client.pk %}">{% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.path }}">
+        <button type="submit">{% if client.enabled %}Disable{% else %}Enable{% endif %}</button></form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="cols">
+  <div class="card">
+    <h2>Connect a device</h2>
+    {% if client.can_download %}
+      <ol style="padding-left:18px;margin-top:0">
+        <li><b>Windows / Mac / Linux:</b> install WireGuard, click <i>Import tunnel(s) from file</i>, pick the downloaded <code>{{ client.config_filename }}</code>, click <i>Activate</i>.</li>
+        <li><b>Phone:</b> WireGuard app → <i>+</i> → <i>Scan from QR code</i>.</li>
+      </ol>
+      <div class="qr">{{ qr_svg }}</div>
+      <p class="muted" style="font-size:13px">The config holds this device's private key. Share it only with its owner, one device per config.</p>
+    {% elif not client.server.public_key %}
+      <p><span class="pill warn">Server public key missing</span> Open the service and run <b>Import from server</b>.</p>
+    {% else %}
+      <p><span class="pill warn">No private key</span> This peer was imported from the server and its private key was not found.
+      The device that already has it keeps working. To make a downloadable config, regenerate keys (the old config then stops working).</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Details</h2>
+    <dl class="kv">
+      <dt>Service</dt><dd>{% if user.is_staff %}<a href="{% url 'server_detail' client.server.pk %}">{{ client.server.name }}</a>{% else %}{{ client.server.name }}{% endif %} · <code>{{ client.server.endpoint }}</code></dd>
+      <dt>Addresses</dt><dd><code>{{ client.client_addresses }}</code></dd>
+      <dt>Owner</dt><dd>{{ client.owner.username|default:"—" }}</dd>
+      <dt>Expires</dt><dd>{{ client.expires_at|default:"never" }}</dd>
+      <dt>Public key</dt><dd><code>{{ client.public_key }}</code></dd>
+      <dt>Last handshake</dt><dd>{% if client.last_handshake %}{{ client.last_handshake|timesince }} ago{% else %}—{% endif %}</dd>
+      <dt>Last endpoint</dt><dd>{{ client.last_endpoint|default:"—" }}</dd>
+      <dt>Traffic</dt><dd>↓ {{ client.rx_bytes|bytes_human }} · ↑ {{ client.tx_bytes|bytes_human }}</dd>
+      <dt>Created</dt><dd>{{ client.created_at }}</dd>
+      {% if client.notes %}<dt>Notes</dt><dd style="white-space:pre-line">{{ client.notes }}</dd>{% endif %}
+    </dl>
+    {% if user.is_staff %}
+    <div class="actions" style="margin-top:18px">
+      <form class="inline" method="post" action="{% url 'client_regenerate' client.pk %}" onsubmit="return confirm('Generate new keys? The current config on the device will stop working.')">{% csrf_token %}
+        <button type="submit">Regenerate keys</button></form>
+      <a class="btn danger" href="{% url 'client_delete' client.pk %}">Delete</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

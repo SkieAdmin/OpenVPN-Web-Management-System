@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{% if server %}Edit {{ server.name }}{% else %}Add service{% endif %}{% endblock %}
+{% block content %}
+<div class="head">
+  <div><h1>{% if server %}Edit {{ server.name }}{% else %}Add VPN service{% endif %}</h1>
+  <p class="sub">Connect this app to your Linux WireGuard server. Use the defaults if you installed with the wireguard-install script.</p></div>
+</div>
+<form method="post" class="card">{% csrf_token %}
+  {% if form.non_field_errors %}<ul class="msgs">{% for e in form.non_field_errors %}<li class="error">{{ e }}</li>{% endfor %}</ul>{% endif %}
+  {% for title, fields in form.fieldsets %}
+  <fieldset><legend>{{ title }}</legend>
+    <div class="two">{% include "_fields.html" with fields=fields %}</div>
+  </fieldset>
+  {% endfor %}
+  <div class="actions">
+    <button class="primary" type="submit">Save</button>
+    <a class="btn" href="{% if server %}{% url 'server_detail' server.pk %}{% else %}{% url 'server_list' %}{% endif %}">Cancel</a>
+    {% if server %}<a class="btn danger" href="{% url 'server_delete' server.pk %}" style="margin-left:auto">Delete</a>{% endif %}
+  </div>
+</form>
+{% endblock %}

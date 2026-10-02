@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Activity{% endblock %}
+{% block content %}
+<div class="head"><div><h1>Activity</h1><p class="sub">Last 300 actions: logins excluded, every server change and config download included.</p></div></div>
+<div class="card">{% include "vpn/_log_rows.html" %}</div>
+{% endblock %}
