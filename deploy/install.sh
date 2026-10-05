@@ -142,18 +142,28 @@ fi
 PORT_SUFFIX=""
 [[ "$PORT" == "443" ]] || PORT_SUFFIX=":$PORT"
 
+# Without nginx there is no TLS, and gunicorn answers on the bind address itself.
+SCHEME=https
+BIND_HOST=""
+if [[ "$NGINX" == "0" ]]; then
+	SCHEME=http
+	BIND_HOST=${BIND%:*}
+fi
+PANEL_HOST=${ENDPOINT:-$VPN_IP}
+[[ -z "$BIND_HOST" || "$BIND_HOST" == "0.0.0.0" ]] || PANEL_HOST=$BIND_HOST
+PANEL_URL="$SCHEME://$PANEL_HOST$PORT_SUFFIX"
+
 step "Settings ($ENV_FILE)"
 if [[ ! -f "$ENV_FILE" ]]; then
 	SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')
 	HOSTS="$VPN_IP,localhost,127.0.0.1"
-	ORIGINS="https://$VPN_IP$PORT_SUFFIX"
+	ORIGINS="$SCHEME://$VPN_IP$PORT_SUFFIX"
 	if [[ -n "$ENDPOINT" ]]; then
 		HOSTS="$HOSTS,$ENDPOINT"
-		ORIGINS="$ORIGINS,https://$ENDPOINT$PORT_SUFFIX"
+		ORIGINS="$ORIGINS,$SCHEME://$ENDPOINT$PORT_SUFFIX"
 	fi
 	cat > "$ENV_FILE" << EOF
 PRIVATEVPN_DEBUG=0
-PRIVATEVPN_HTTPS=1
 PRIVATEVPN_SECRET_KEY=$SECRET
 PRIVATEVPN_DATA_DIR=$DATA_DIR
 PRIVATEVPN_STATIC_ROOT=$APP_DIR/staticfiles
@@ -164,6 +174,20 @@ EOF
 	echo "Created $ENV_FILE"
 else
 	echo "Keeping existing $ENV_FILE"
+fi
+
+# Serving mode, refreshed on every run so a bare re-run keeps working and an
+# older install picks up the new keys.
+env_set PRIVATEVPN_NGINX "$NGINX"
+env_set PRIVATEVPN_BIND "$BIND"
+env_set PRIVATEVPN_HTTPS "$NGINX"
+if [[ -n "$BIND_HOST" && "$BIND_HOST" != "0.0.0.0" ]]; then
+	# The panel answers on this address, so Django must accept it as a host.
+	HOSTS=$(env_get PRIVATEVPN_ALLOWED_HOSTS)
+	case ",$HOSTS," in
+		*",$BIND_HOST,"*) ;;
+		*) env_set PRIVATEVPN_ALLOWED_HOSTS "$HOSTS,$BIND_HOST"; echo "Allowed $BIND_HOST" ;;
+	esac
 fi
 chown root:"$APP_USER" "$ENV_FILE"
 chmod 0640 "$ENV_FILE"
@@ -181,7 +205,9 @@ manage setup_local_server --interface "$IFACE" ${ENDPOINT:+--endpoint "$ENDPOINT
 	echo "WARNING: import failed, finish it in the web UI (Services > Import from server)."
 
 step "TLS certificate"
-if [[ ! -f "$CONF_DIR/tls.crt" ]]; then
+if [[ "$NGINX" == "0" ]]; then
+	echo "Skipped (no nginx, nothing terminates TLS)."
+elif [[ ! -f "$CONF_DIR/tls.crt" ]]; then
 	SAN="IP:$VPN_IP,DNS:localhost"
 	if [[ -n "$ENDPOINT" ]]; then
 		if [[ "$ENDPOINT" =~ ^[0-9.]+$ ]]; then SAN="$SAN,IP:$ENDPOINT"; else SAN="$SAN,DNS:$ENDPOINT"; fi
@@ -196,12 +222,21 @@ else
 fi
 
 step "nginx"
+NGINX_CONF=/etc/nginx/conf.d/privatevpn.conf
+if [[ "$NGINX" == "0" ]]; then
+	# Switching away from nginx: drop our site so it stops answering on the old port.
+	if [[ -f "$NGINX_CONF" ]]; then
+		rm -f "$NGINX_CONF"
+		systemctl reload nginx 2> /dev/null || true
+		echo "Removed $NGINX_CONF"
+	fi
+	echo "Skipped (gunicorn serves $BIND directly)."
+else
 if [[ "$ACCESS" == "vpn" ]]; then
 	RULES="    # VPN-only: connect to WireGuard first, then open https://$VPN_IP$PORT_SUFFIX\n    allow $VPN_NET;\n    allow 127.0.0.1;\n    deny all;"
 else
 	RULES="    # Public: reachable from anywhere. Keep strong passwords."
 fi
-NGINX_CONF=/etc/nginx/conf.d/privatevpn.conf
 sed -e "s/__PORT__/$PORT/g" "$APP_DIR/deploy/nginx.conf.template" \
 	| awk -v rules="$RULES" '{ if ($0 == "__ACCESS_RULES__") { gsub(/\\n/, "\n", rules); print rules } else print }' \
 	> "$NGINX_CONF"
@@ -212,10 +247,17 @@ fi
 nginx -t
 systemctl enable --now nginx > /dev/null
 systemctl reload nginx
+fi
 
 step "Firewall"
 if command -v ufw > /dev/null && ufw status | grep -q "Status: active"; then
-	if [[ "$ACCESS" == "vpn" ]]; then ufw allow in on "$IFACE" to any port "$PORT" proto tcp; else ufw allow "$PORT"/tcp; fi
+	# Without nginx, gunicorn is already bound to one address, so the port rule
+	# is all that is needed. The --vpn-only restriction is an nginx-level rule.
+	if [[ "$ACCESS" == "vpn" && "$NGINX" == "1" ]]; then
+		ufw allow in on "$IFACE" to any port "$PORT" proto tcp
+	else
+		ufw allow "$PORT"/tcp
+	fi
 elif command -v firewall-cmd > /dev/null && firewall-cmd --state &> /dev/null; then
 	firewall-cmd -q --permanent --add-port="$PORT"/tcp && firewall-cmd -q --reload
 else
@@ -233,7 +275,11 @@ systemctl is-active --quiet privatevpn || { journalctl -u privatevpn -n 30 --no-
 echo
 echo "================================================================"
 echo " PrivateVPN panel installed."
-if [[ "$ACCESS" == "vpn" ]]; then
+if [[ "$NGINX" == "0" ]]; then
+	echo " Open:  $PANEL_URL"
+	echo " No TLS: this is plain HTTP. Only reach it over a private network"
+	echo " (Tailscale, WireGuard, LAN) - it hands out VPN private keys."
+elif [[ "$ACCESS" == "vpn" ]]; then
 	echo " Connect to the VPN, then open:  https://$VPN_IP$PORT_SUFFIX"
 else
 	echo " Open:  https://${ENDPOINT:-$VPN_IP}$PORT_SUFFIX"

@@ -39,6 +39,10 @@ Options:
 | `--port 9443` | Use another HTTPS port |
 | `--interface wg1` | WireGuard interface (default `wg0`) |
 | `--endpoint vpn.example.com` | Public address written into client configs (auto-detected otherwise) |
+| `--no-nginx --bind 100.64.0.1:8905` | Skip nginx and TLS; gunicorn listens on that address directly |
+| `--nginx` | Switch back to nginx on a later run |
+
+`--no-nginx` is for when the panel is already reached over a private network, such as Tailscale, WireGuard or a LAN — that network provides the encryption nginx would have. Never point `--bind` at a public address: the panel hands out VPN private keys and would send them in clear text.
 
 The installer:
 
@@ -47,8 +51,8 @@ The installer:
 - sets up a Python virtual environment with gunicorn
 - installs the helper and its sudo rule
 - writes `/etc/privatevpn.env`
-- creates a self-signed TLS certificate
-- configures nginx and opens the firewall port
+- creates a self-signed TLS certificate (skipped with `--no-nginx`)
+- configures nginx and opens the firewall port (with `--no-nginx`, removes the nginx site instead)
 - starts the `privatevpn` service
 - **registers your existing `wg0` and imports its peers**, so nobody gets disconnected
 
@@ -62,7 +66,7 @@ git pull
 sudo bash deploy/install.sh
 ```
 
-Re-running the installer keeps the database, settings and certificate.
+Re-running the installer keeps the database, settings and certificate. It also remembers how the panel is served, so a bare re-run updates the code without putting nginx back or changing the bind address. Pass `--nginx` or `--no-nginx --bind HOST:PORT` only when you want to change that.
 
 ### Useful commands
 
