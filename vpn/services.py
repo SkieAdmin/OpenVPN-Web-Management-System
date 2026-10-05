@@ -3,7 +3,9 @@ import ipaddress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone as dt_timezone
 
+from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 from . import wg
@@ -11,6 +13,12 @@ from .models import Client, Server
 from .remote import RemoteError, connect
 
 SERVICE_ACTIONS = {"start", "stop", "restart"}
+
+# Traffic history for the dashboard graph. Kept in the shared file cache rather
+# than the database: it is throw-away data, and every gunicorn worker sees it.
+TRAFFIC_CACHE_KEY = "vpn.traffic.history"
+TRAFFIC_INTERVAL = 10       # seconds between samples
+TRAFFIC_POINTS = 60         # 60 x 10s = the last 10 minutes
 
 
 @dataclass
@@ -219,6 +227,56 @@ def refresh_status(server: Server) -> Result:
         server.save(update_fields=["last_status", "last_checked_at"])
     online = sum(1 for c in server.clients.all() if c.is_online)
     return Result(True, f"Service {live}. {online} client(s) online.")
+
+
+def sample_traffic(force: bool = False):
+    """Refresh counters from every server and append one point to the history.
+
+    Several open dashboards poll this at once, so a sample is only taken when
+    the previous one is at least TRAFFIC_INTERVAL old; otherwise the cached
+    history is returned untouched. Returns (history, error message or None).
+    """
+    history = cache.get(TRAFFIC_CACHE_KEY) or []
+    now = timezone.now().timestamp()
+    # Allow a second of slack so a poll that arrives slightly early still counts.
+    if not force and history and now - history[-1]["t"] < TRAFFIC_INTERVAL - 1:
+        return history, None
+
+    error = None
+    for server in Server.objects.all():
+        result = refresh_status(server)
+        if not result.ok and error is None:
+            error = result.message
+
+    totals = Client.objects.aggregate(rx=Sum("rx_bytes"), tx=Sum("tx_bytes"))
+    history.append({
+        "t": now,
+        # From the server's point of view: rx is what clients uploaded to it.
+        "rx": totals["rx"] or 0,
+        "tx": totals["tx"] or 0,
+        "online": sum(1 for c in Client.objects.all() if c.is_online),
+    })
+    history = history[-TRAFFIC_POINTS:]
+    cache.set(TRAFFIC_CACHE_KEY, history, TRAFFIC_INTERVAL * TRAFFIC_POINTS * 2)
+    return history, error
+
+
+def traffic_rates(history):
+    """Turn cumulative byte counters into bytes/second between samples."""
+    points = []
+    for previous, current in zip(history, history[1:]):
+        seconds = current["t"] - previous["t"]
+        if seconds <= 0:
+            continue
+        # WireGuard counters reset when the interface restarts, so ignore a
+        # drop instead of charting a negative rate.
+        points.append({
+            "t": current["t"],
+            "up": max(0, current["rx"] - previous["rx"]) / seconds,
+            "down": max(0, current["tx"] - previous["tx"]) / seconds,
+            "online": current["online"],
+        })
+    return points
 
 
 def expire_clients() -> int:

@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=simple
 User=privatevpn
 Group=privatevpn
-# Default when PRIVATEVPN_BIND is not in the env file: listen on localhost only,
-# for the nginx setup. The EnvironmentFile below overrides it when set.
-Environment=PRIVATEVPN_BIND=127.0.0.1:8010
+# gunicorn serves the panel directly, so this is the address browsers connect
+# to. deploy/install.sh writes the real value into the env file below.
+Environment=PRIVATEVPN_BIND=0.0.0.0:8905
 EnvironmentFile=/etc/privatevpn.env
 WorkingDirectory=/opt/privatevpn
 ExecStart=/opt/privatevpn/.venv/bin/gunicorn privatevpn.wsgi:application \

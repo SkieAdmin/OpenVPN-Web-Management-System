@@ -2,7 +2,9 @@ import base64
 from unittest import mock
 
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.test import TestCase
+from django.utils import timezone
 
 from . import services, wg
 from .forms import ClientForm
@@ -245,3 +247,87 @@ class AuthTests(TestCase):
         resp = self.client.post("/login/", {"username": "admin", "password": "admin2027"})
         self.assertContains(resp, "Too many failed logins")
         self.assertNotIn("_auth_user_id", self.client.session)
+
+
+class TrafficGraphTests(TestCase):
+    """The dashboard graph: sampling, rate maths and the JSON endpoint."""
+
+    def setUp(self):
+        cache.clear()
+        self.server = Server.objects.create(
+            name="SG", endpoint_host="203.0.113.9", server_address="10.7.0.1/24",
+        )
+        self.client_obj = Client.objects.create(
+            server=self.server, name="phone", ipv4="10.7.0.2",
+            private_key=PEER_PRIV, public_key=PEER_PUB,
+        )
+
+    def _runner(self, rx, tx, handshake=None):
+        if handshake is None:
+            handshake = int(timezone.now().timestamp())
+        runner = FakeRunner(dict(self.files_or_empty()))
+        runner.dump = lambda: (
+            "iface\tkey\t51820\toff\n"
+            f"{PEER_PUB}\t(none)\t198.51.100.4:7000\t10.7.0.2/32\t{handshake}\t{rx}\t{tx}\t0\n"
+        )
+        return runner
+
+    def files_or_empty(self):
+        return {"/etc/wireguard/wg0.conf": SERVER_CONF}
+
+    def test_rates_come_from_counter_deltas(self):
+        history = [
+            {"t": 100.0, "rx": 1000, "tx": 5000, "online": 1},
+            {"t": 110.0, "rx": 2000, "tx": 15000, "online": 1},
+        ]
+        points = services.traffic_rates(history)
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]["up"], 100)     # 1000 bytes over 10s
+        self.assertEqual(points[0]["down"], 1000)  # 10000 bytes over 10s
+
+    def test_counter_reset_does_not_make_negative_rate(self):
+        history = [
+            {"t": 100.0, "rx": 9000, "tx": 9000, "online": 1},
+            {"t": 110.0, "rx": 10, "tx": 10, "online": 1},  # wg restarted
+        ]
+        points = services.traffic_rates(history)
+        self.assertEqual(points[0]["up"], 0)
+        self.assertEqual(points[0]["down"], 0)
+
+    def test_sampling_is_throttled(self):
+        with mock.patch.object(services, "connect", return_value=self._runner(500, 700)):
+            history, error = services.sample_traffic()
+        self.assertIsNone(error)
+        self.assertEqual(len(history), 1)
+
+        # A second poll straight away must reuse the sample, not hit WireGuard.
+        with mock.patch.object(services, "connect", side_effect=AssertionError("polled too soon")):
+            history, _ = services.sample_traffic()
+        self.assertEqual(len(history), 1)
+
+    def test_history_is_capped(self):
+        long_history = [{"t": float(i), "rx": i, "tx": i, "online": 0}
+                        for i in range(services.TRAFFIC_POINTS + 10)]
+        cache.set(services.TRAFFIC_CACHE_KEY, long_history)
+        with mock.patch.object(services, "connect", return_value=self._runner(10, 20)):
+            history, _ = services.sample_traffic(force=True)
+        self.assertEqual(len(history), services.TRAFFIC_POINTS)
+
+    def test_endpoint_returns_points_and_needs_staff(self):
+        User.objects.create_user("bob", "", "Tunnel-Horse-91")
+        self.client.login(username="bob", password="Tunnel-Horse-91")
+        self.assertEqual(self.client.get("/stats.json").status_code, 403)
+
+        User.objects.create_superuser("boss", "", "Tunnel-Horse-91")
+        self.client.login(username="boss", password="Tunnel-Horse-91")
+        cache.set(services.TRAFFIC_CACHE_KEY, [
+            {"t": 100.0, "rx": 0, "tx": 0, "online": 1},
+            {"t": 110.0, "rx": 1000, "tx": 2000, "online": 1},
+        ])
+        with mock.patch.object(services, "connect", return_value=self._runner(1000, 2000)):
+            resp = self.client.get("/stats.json")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["interval"], services.TRAFFIC_INTERVAL)
+        self.assertEqual(data["points"][0]["up"], 100)
+        self.assertEqual(data["points"][0]["down"], 200)

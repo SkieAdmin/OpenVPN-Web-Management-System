@@ -10,7 +10,7 @@ from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.models import User
 from django.core.exceptions import PermissionDenied
 from django.db.models import Count, Q
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
@@ -76,7 +76,23 @@ def dashboard(request):
         ctx["servers"] = Server.objects.annotate(n_clients=Count("clients"))
         ctx["account_total"] = User.objects.count()
         ctx["logs"] = AuditLog.objects.select_related("user")[:8]
+        ctx["traffic_interval"] = services.TRAFFIC_INTERVAL
     return render(request, "vpn/dashboard.html", ctx)
+
+
+@staff_required
+def dashboard_stats(request):
+    """Traffic history for the dashboard graph, polled every few seconds."""
+    history, error = services.sample_traffic()
+    latest = history[-1] if history else {}
+    return JsonResponse({
+        "points": services.traffic_rates(history),
+        "online": latest.get("online", 0),
+        "total_up": latest.get("rx", 0),
+        "total_down": latest.get("tx", 0),
+        "interval": services.TRAFFIC_INTERVAL,
+        "error": error,
+    })
 
 
 # --- servers --------------------------------------------------------------

@@ -19,6 +19,30 @@
 
 {% if user.is_staff %}
 <div class="card">
+  <div class="chart-head">
+    <h2>Traffic</h2>
+    <p class="muted" id="chart-note">Collecting the first samples…</p>
+  </div>
+  <div class="chart-legend">
+    <span><i class="swatch down"></i>Down <b id="rate-down">—</b></span>
+    <span><i class="swatch up"></i>Up <b id="rate-up">—</b></span>
+    <span class="muted" id="chart-peak"></span>
+  </div>
+  <svg id="chart" viewBox="0 0 600 160" preserveAspectRatio="none" role="img"
+       aria-label="VPN traffic over the last ten minutes">
+    <line class="grid" x1="0" y1="40" x2="600" y2="40"/>
+    <line class="grid" x1="0" y1="80" x2="600" y2="80"/>
+    <line class="grid" x1="0" y1="120" x2="600" y2="120"/>
+    <path id="area-down" class="area down"/>
+    <path id="area-up" class="area up"/>
+    <path id="line-down" class="line down"/>
+    <path id="line-up" class="line up"/>
+  </svg>
+  <p class="muted chart-foot">Down is traffic the server sent to clients, up is what it received.
+    Last 10 minutes, refreshed every {{ traffic_interval }} seconds.</p>
+</div>
+
+<div class="card">
   <h2>VPN services</h2>
   {% if servers %}
   <div class="table-wrap"><table>
@@ -52,5 +76,90 @@
   <h2>Recent activity</h2>
   {% include "vpn/_log_rows.html" %}
 </div>
+{% endif %}
+
+{% if user.is_staff %}
+<style>
+.chart-head{display:flex;align-items:baseline;gap:12px;justify-content:space-between;flex-wrap:wrap}
+.chart-head h2{margin:0}
+.chart-legend{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:10px 0 6px}
+.chart-legend b{color:var(--text);font-variant-numeric:tabular-nums}
+.swatch{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}
+.swatch.down{background:var(--accent)} .swatch.up{background:var(--ok)}
+#chart{width:100%;height:170px;display:block}
+#chart .grid{stroke:var(--border);stroke-width:1;vector-effect:non-scaling-stroke}
+#chart .line{fill:none;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+#chart .line.down{stroke:var(--accent)} #chart .line.up{stroke:var(--ok)}
+#chart .area{stroke:none;opacity:.14}
+#chart .area.down{fill:var(--accent)} #chart .area.up{fill:var(--ok)}
+.chart-foot{font-size:12px;margin:6px 0 0}
+</style>
+<script>
+(function () {
+  var url = "{% url 'dashboard_stats' %}";
+  var interval = {{ traffic_interval }} * 1000;
+  var W = 600, H = 160;
+  var note = document.getElementById("chart-note");
+  var peakLabel = document.getElementById("chart-peak");
+  var timer = null;
+
+  function human(bytesPerSecond) {
+    var units = ["B/s", "KB/s", "MB/s", "GB/s"], size = bytesPerSecond, i = 0;
+    while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+    return (i === 0 ? Math.round(size) : size.toFixed(1)) + " " + units[i];
+  }
+
+  function shape(points, key, max) {
+    var line = "", step = points.length > 1 ? W / (points.length - 1) : 0;
+    points.forEach(function (p, i) {
+      var x = i * step, y = H - (p[key] / max) * H;
+      line += (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1) + " ";
+    });
+    return { line: line, area: points.length > 1 ? line + "L" + W + " " + H + " L0 " + H + " Z" : "" };
+  }
+
+  function draw(points) {
+    var peak = 0;
+    points.forEach(function (p) { peak = Math.max(peak, p.down, p.up); });
+    // Floor the scale so an idle VPN draws a flat line instead of noise.
+    var max = Math.max(peak, 1024);
+    ["down", "up"].forEach(function (key) {
+      var s = shape(points, key, max);
+      document.getElementById("line-" + key).setAttribute("d", s.line);
+      document.getElementById("area-" + key).setAttribute("d", s.area);
+    });
+    peakLabel.textContent = points.length ? "peak " + human(peak) : "";
+  }
+
+  function tick() {
+    fetch(url, { headers: { "Accept": "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (data) {
+        var points = data.points || [];
+        var last = points[points.length - 1];
+        document.getElementById("rate-down").textContent = last ? human(last.down) : "—";
+        document.getElementById("rate-up").textContent = last ? human(last.up) : "—";
+        draw(points);
+        if (data.error) {
+          note.textContent = data.error;
+        } else if (points.length < 2) {
+          note.textContent = "Collecting the first samples…";
+        } else {
+          note.textContent = data.online + " client(s) online";
+        }
+      })
+      .catch(function () { note.textContent = "Cannot reach the server."; });
+  }
+
+  function start() { tick(); timer = setInterval(tick, interval); }
+  function stop() { clearInterval(timer); timer = null; }
+
+  // No point polling WireGuard while nobody is looking at the page.
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { stop(); } else if (!timer) { start(); }
+  });
+  start();
+})();
+</script>
 {% endif %}
 {% endblock %}
