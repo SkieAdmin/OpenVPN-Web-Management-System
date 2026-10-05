@@ -4,9 +4,16 @@
 #   sudo bash deploy/install.sh                 # panel reachable only through the VPN
 #   sudo bash deploy/install.sh --public        # panel reachable from the internet too
 #   sudo bash deploy/install.sh --port 9443 --interface wg0 --endpoint vpn.example.com
+#   sudo bash deploy/install.sh --no-nginx --bind 100.64.0.1:8905
+#                                               # no nginx, no TLS: gunicorn listens
+#                                               # directly on --bind. Only safe when
+#                                               # that address is already private
+#                                               # (Tailscale, WireGuard, LAN).
 #
 # Safe to run again after `git pull` to update. Settings in /etc/privatevpn.env,
-# the database and the TLS certificate are kept.
+# the database and the TLS certificate are kept, and the serving mode (nginx or
+# not, and the address gunicorn binds) is remembered, so a bare re-run updates
+# the code without changing how the panel is reachable.
 set -euo pipefail
 
 APP_DIR=/opt/privatevpn
@@ -20,18 +27,35 @@ IFACE=wg0
 PORT=8443
 ACCESS=vpn
 ENDPOINT=""
+NGINX=""   # empty = keep whatever the last run chose (nginx for a fresh install)
+BIND=""    # empty = derive from NGINX
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
+
+# Read one setting out of the existing env file, without sourcing it.
+env_get() { [[ -f "$ENV_FILE" ]] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -1; }
+
+# Add or replace one setting in the env file.
+env_set() {
+	if grep -q "^$1=" "$ENV_FILE" 2> /dev/null; then
+		sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
+	else
+		echo "$1=$2" >> "$ENV_FILE"
+	fi
+}
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--public) ACCESS=public ;;
 		--vpn-only) ACCESS=vpn ;;
+		--nginx) NGINX=1 ;;
+		--no-nginx) NGINX=0 ;;
+		--bind) BIND="$2"; NGINX=0; shift ;;
 		--port) PORT="$2"; shift ;;
 		--interface) IFACE="$2"; shift ;;
 		--endpoint) ENDPOINT="$2"; shift ;;
-		-h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,14p' "$0"; exit 0 ;;
 		*) die "unknown option $1" ;;
 	esac
 	shift
@@ -40,6 +64,21 @@ done
 [[ $EUID -eq 0 ]] || die "run as root: sudo bash $0"
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid port"
 [[ "$IFACE" =~ ^[A-Za-z0-9_=+.-]{1,15}$ ]] || die "invalid interface"
+
+# No --nginx/--no-nginx given: keep what the last run set up.
+if [[ -z "$NGINX" ]]; then
+	NGINX=$(env_get PRIVATEVPN_NGINX)
+	[[ -n "$NGINX" ]] || NGINX=1
+fi
+[[ "$NGINX" == "0" || "$NGINX" == "1" ]] || die "PRIVATEVPN_NGINX in $ENV_FILE must be 0 or 1"
+if [[ "$NGINX" == "0" ]]; then
+	[[ -n "$BIND" ]] || BIND=$(env_get PRIVATEVPN_BIND)
+	[[ -n "$BIND" ]] || die "--no-nginx needs --bind HOST:PORT (e.g. --bind 100.64.0.1:8905)"
+	[[ "$BIND" =~ ^[A-Za-z0-9_.:-]+:[0-9]+$ ]] || die "invalid --bind '$BIND', expected HOST:PORT"
+	PORT=${BIND##*:}
+else
+	BIND=127.0.0.1:8010
+fi
 SRC_DIR=$(cd "$(dirname "$0")/.." && pwd)
 WG_CONF="/etc/wireguard/$IFACE.conf"
 
