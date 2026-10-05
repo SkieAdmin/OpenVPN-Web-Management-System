@@ -2,3 +2,4 @@ Django>=5.2,<6.1
 paramiko>=3.4
 cryptography>=42
 qrcode>=8
+whitenoise>=6.6

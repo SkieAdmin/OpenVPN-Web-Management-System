@@ -7,10 +7,13 @@ Wants=network-online.target
 Type=simple
 User=privatevpn
 Group=privatevpn
+# Default when PRIVATEVPN_BIND is not in the env file: listen on localhost only,
+# for the nginx setup. The EnvironmentFile below overrides it when set.
+Environment=PRIVATEVPN_BIND=127.0.0.1:8010
 EnvironmentFile=/etc/privatevpn.env
 WorkingDirectory=/opt/privatevpn
 ExecStart=/opt/privatevpn/.venv/bin/gunicorn privatevpn.wsgi:application \
-    --bind 127.0.0.1:8010 --workers 2 --timeout 90 --access-logfile - --error-logfile -
+    --bind $PRIVATEVPN_BIND --workers 2 --timeout 90 --access-logfile - --error-logfile -
 Restart=on-failure
 RestartSec=3
 PrivateTmp=true
