@@ -85,6 +85,8 @@ sudo nano /etc/privatevpn.env && sudo systemctl restart privatevpn
 
 ## Using it
 
+- **Dashboard**
+  - A live traffic graph, admins only, sampled once a second. WireGuard exposes counters rather than events, so "live" is a fast poll of `wg show`; set `PRIVATEVPN_TRAFFIC_SECONDS` in `/etc/privatevpn.env` to slow it down.
 - **Services**
   - Shows the WireGuard server: status, start, stop, restart.
   - **Import from server** pulls in peers that were added outside the app.

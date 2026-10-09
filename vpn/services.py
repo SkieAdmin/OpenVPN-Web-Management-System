@@ -3,6 +3,7 @@ import ipaddress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone as dt_timezone
 
+from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Sum
@@ -16,9 +17,17 @@ SERVICE_ACTIONS = {"start", "stop", "restart"}
 
 # Traffic history for the dashboard graph. Kept in the shared file cache rather
 # than the database: it is throw-away data, and every gunicorn worker sees it.
+#
+# WireGuard has nothing to subscribe to - `wg show dump` is a snapshot of
+# counters - so "live" means sampling often. One second is the useful floor:
+# below that the counters barely move and the numbers turn to noise.
 TRAFFIC_CACHE_KEY = "vpn.traffic.history"
-TRAFFIC_INTERVAL = 10       # seconds between samples
-TRAFFIC_POINTS = 60         # 60 x 10s = the last 10 minutes
+TRAFFIC_PERSIST_KEY = "vpn.traffic.persisted"
+TRAFFIC_INTERVAL = getattr(settings, "PRIVATEVPN_TRAFFIC_SECONDS", 1)
+TRAFFIC_POINTS = 180        # 180 x 1s = the last 3 minutes
+# Writing every client row back to SQLite once a second is pointless churn, so
+# the counters are only persisted this often. Sampling stays independent of it.
+TRAFFIC_PERSIST_SECONDS = 10
 
 
 @dataclass
@@ -229,35 +238,71 @@ def refresh_status(server: Server) -> Result:
     return Result(True, f"Service {live}. {online} client(s) online.")
 
 
+def read_totals():
+    """Current byte counters straight from WireGuard, without touching the DB.
+
+    This is the per-second path behind the dashboard graph: one `wg show dump`
+    per server and no writes, so sampling often stays cheap. Peers the app does
+    not know about are ignored, to match the counts shown everywhere else.
+    """
+    known = set(Client.objects.exclude(public_key="").values_list("public_key", flat=True))
+    now = timezone.now().timestamp()
+    rx = tx = online = 0
+    error = None
+    for server in Server.objects.all():
+        try:
+            with connect(server) as runner:
+                if runner.is_active() != "active":
+                    continue
+                peers = wg.parse_dump(runner.dump())
+        except RemoteError as exc:
+            error = error or str(exc)
+            continue
+        for key, info in peers.items():
+            if key not in known:
+                continue
+            rx += info["rx"]
+            tx += info["tx"]
+            handshake = info["latest_handshake"]
+            if handshake and now - handshake < 180:
+                online += 1
+    return rx, tx, online, error
+
+
 def sample_traffic(force: bool = False):
-    """Refresh counters from every server and append one point to the history.
+    """Append one point to the traffic history and return (history, error).
 
     Several open dashboards poll this at once, so a sample is only taken when
     the previous one is at least TRAFFIC_INTERVAL old; otherwise the cached
-    history is returned untouched. Returns (history, error message or None).
+    history is returned untouched, and the servers are left alone.
+
+    Most samples read the counters without saving them. Every
+    TRAFFIC_PERSIST_SECONDS one goes through refresh_status instead, so the
+    client rows behind "Last seen" and the traffic columns stay current.
     """
     history = cache.get(TRAFFIC_CACHE_KEY) or []
     now = timezone.now().timestamp()
-    # Allow a second of slack so a poll that arrives slightly early still counts.
-    if not force and history and now - history[-1]["t"] < TRAFFIC_INTERVAL - 1:
+    # 10% of slack, so a poll arriving a touch early still counts as due.
+    if not force and history and now - history[-1]["t"] < TRAFFIC_INTERVAL * 0.9:
         return history, None
 
-    error = None
-    for server in Server.objects.all():
-        result = refresh_status(server)
-        if not result.ok and error is None:
-            error = result.message
+    if now - (cache.get(TRAFFIC_PERSIST_KEY) or 0) >= TRAFFIC_PERSIST_SECONDS:
+        error = None
+        for server in Server.objects.all():
+            result = refresh_status(server)
+            if not result.ok and error is None:
+                error = result.message
+        totals = Client.objects.aggregate(rx=Sum("rx_bytes"), tx=Sum("tx_bytes"))
+        rx, tx = totals["rx"] or 0, totals["tx"] or 0
+        online = sum(1 for c in Client.objects.all() if c.is_online)
+        cache.set(TRAFFIC_PERSIST_KEY, now, TRAFFIC_PERSIST_SECONDS * 10)
+    else:
+        rx, tx, online, error = read_totals()
 
-    totals = Client.objects.aggregate(rx=Sum("rx_bytes"), tx=Sum("tx_bytes"))
-    history.append({
-        "t": now,
-        # From the server's point of view: rx is what clients uploaded to it.
-        "rx": totals["rx"] or 0,
-        "tx": totals["tx"] or 0,
-        "online": sum(1 for c in Client.objects.all() if c.is_online),
-    })
+    # From the server's point of view: rx is what clients uploaded to it.
+    history.append({"t": now, "rx": rx, "tx": tx, "online": online})
     history = history[-TRAFFIC_POINTS:]
-    cache.set(TRAFFIC_CACHE_KEY, history, TRAFFIC_INTERVAL * TRAFFIC_POINTS * 2)
+    cache.set(TRAFFIC_CACHE_KEY, history, max(60, TRAFFIC_INTERVAL * TRAFFIC_POINTS * 2))
     return history, error
 
 

@@ -132,3 +132,7 @@ PRIVATEVPN_DEFAULT_ADMIN_PASSWORD = "admin2027"
 # Lock a username+IP out for LOGIN_LOCK_SECONDS after this many failures.
 LOGIN_MAX_FAILURES = 5
 LOGIN_LOCK_SECONDS = 15 * 60
+# Seconds between samples on the dashboard traffic graph. 1 is as live as
+# WireGuard gets: its counters are read with `wg show`, there is nothing to
+# subscribe to. Raise it if the server is managed over a slow SSH link.
+PRIVATEVPN_TRAFFIC_SECONDS = int(os.environ.get("PRIVATEVPN_TRAFFIC_SECONDS", "1"))

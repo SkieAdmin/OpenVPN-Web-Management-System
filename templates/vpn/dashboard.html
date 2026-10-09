@@ -39,7 +39,7 @@
     <path id="line-up" class="line up"/>
   </svg>
   <p class="muted chart-foot">Down is traffic the server sent to clients, up is what it received.
-    Last 10 minutes, refreshed every {{ traffic_interval }} seconds.</p>
+    Last few minutes, live at {{ traffic_interval }}s resolution.</p>
 </div>
 
 <div class="card">
@@ -131,10 +131,15 @@
     peakLabel.textContent = points.length ? "peak " + human(peak) : "";
   }
 
+  var running = false;
+  var failures = 0;
+
   function tick() {
     fetch(url, { headers: { "Accept": "application/json" } })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function (data) {
+        failures = 0;
+        if (data.interval) { interval = data.interval * 1000; }
         var points = data.points || [];
         var last = points[points.length - 1];
         document.getElementById("rate-down").textContent = last ? human(last.down) : "—";
@@ -148,15 +153,25 @@
           note.textContent = data.online + " client(s) online";
         }
       })
-      .catch(function () { note.textContent = "Cannot reach the server."; });
+      .catch(function () {
+        failures++;
+        note.textContent = "Cannot reach the server.";
+      })
+      .then(function () {
+        // Chained, not setInterval: at one second apart a slow reply would
+        // otherwise stack requests on top of each other. Back off on errors.
+        if (!running) { return; }
+        var wait = failures ? Math.min(interval * Math.pow(2, failures), 30000) : interval;
+        timer = setTimeout(tick, wait);
+      });
   }
 
-  function start() { tick(); timer = setInterval(tick, interval); }
-  function stop() { clearInterval(timer); timer = null; }
+  function start() { if (!running) { running = true; tick(); } }
+  function stop() { running = false; clearTimeout(timer); timer = null; }
 
   // No point polling WireGuard while nobody is looking at the page.
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden) { stop(); } else if (!timer) { start(); }
+    if (document.hidden) { stop(); } else { start(); }
   });
   start();
 })();

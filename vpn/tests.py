@@ -295,15 +295,56 @@ class TrafficGraphTests(TestCase):
         self.assertEqual(points[0]["down"], 0)
 
     def test_sampling_is_throttled(self):
+        # A sample that was just taken means the next poll must reuse it rather
+        # than go out to WireGuard again, however many dashboards are open.
+        now = timezone.now().timestamp()
+        cache.set(services.TRAFFIC_CACHE_KEY, [{"t": now, "rx": 1, "tx": 2, "online": 1}])
+        with mock.patch.object(services, "connect", side_effect=AssertionError("polled too soon")):
+            history, error = services.sample_traffic()
+        self.assertEqual(len(history), 1)
+        self.assertIsNone(error)
+
+    def test_sample_is_due_once_the_interval_passed(self):
+        stale = timezone.now().timestamp() - services.TRAFFIC_INTERVAL - 1
+        cache.set(services.TRAFFIC_CACHE_KEY, [{"t": stale, "rx": 1, "tx": 2, "online": 1}])
         with mock.patch.object(services, "connect", return_value=self._runner(500, 700)):
             history, error = services.sample_traffic()
         self.assertIsNone(error)
-        self.assertEqual(len(history), 1)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[-1]["rx"], 500)
+        self.assertEqual(history[-1]["tx"], 700)
 
-        # A second poll straight away must reuse the sample, not hit WireGuard.
-        with mock.patch.object(services, "connect", side_effect=AssertionError("polled too soon")):
-            history, _ = services.sample_traffic()
-        self.assertEqual(len(history), 1)
+    def test_most_samples_do_not_write_to_the_database(self):
+        """The per-second path reads counters; only every Nth sample persists."""
+        now = timezone.now().timestamp()
+        cache.set(services.TRAFFIC_PERSIST_KEY, now)  # a write just happened
+        with mock.patch.object(services, "connect", return_value=self._runner(4242, 8484)):
+            history, _ = services.sample_traffic(force=True)
+        self.assertEqual(history[-1]["rx"], 4242)
+        self.assertEqual(history[-1]["online"], 1)
+        self.client_obj.refresh_from_db()
+        self.assertEqual(self.client_obj.rx_bytes, 0)  # untouched
+
+        # With the persist window expired, the same sample is written through.
+        cache.set(services.TRAFFIC_PERSIST_KEY, now - services.TRAFFIC_PERSIST_SECONDS - 1)
+        with mock.patch.object(services, "connect", return_value=self._runner(4242, 8484)):
+            services.sample_traffic(force=True)
+        self.client_obj.refresh_from_db()
+        self.assertEqual(self.client_obj.rx_bytes, 4242)
+
+    def test_unknown_peers_are_ignored(self):
+        other = wg.public_key_from_private(wg.generate_private_key())
+        runner = FakeRunner(self.files_or_empty())
+        handshake = int(timezone.now().timestamp())
+        runner.dump = lambda: (
+            "iface\tkey\t51820\toff\n"
+            f"{PEER_PUB}\t(none)\t198.51.100.4:7000\t10.7.0.2/32\t{handshake}\t100\t200\t0\n"
+            f"{other}\t(none)\t198.51.100.5:7000\t10.7.0.9/32\t{handshake}\t9999\t9999\t0\n"
+        )
+        with mock.patch.object(services, "connect", return_value=runner):
+            rx, tx, online, error = services.read_totals()
+        self.assertIsNone(error)
+        self.assertEqual((rx, tx, online), (100, 200, 1))
 
     def test_history_is_capped(self):
         long_history = [{"t": float(i), "rx": i, "tx": i, "online": 0}
